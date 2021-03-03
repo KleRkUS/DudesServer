@@ -1,6 +1,7 @@
 import {MongoError} from "graphql-compose-mongoose";
 import { Request, Response } from 'express';
 import {Dudes} from "../../core/Dudes.d/dudes";
+import {MongooseDocument} from "mongoose";
 
 const verifyer = require("../utils/Verifyer");
 
@@ -26,10 +27,19 @@ interface TempUser {
     confirmationToken:string
 }
 
-const generateConfirmationLink = (context:string):string => {
+interface GeneratedConfirmationPayload {
+    link:string,
+    token:string
+}
+
+const generateConfirmationPayload = (context:string):GeneratedConfirmationPayload => {
     const shasum = crypto.createHash("sha1");
     shasum.update(context);
-    return `https://localhost:5000/confirm-reg/${shasum.digest('hex')}`;
+    const token = shasum.digest('hex');
+    return {
+        link: `https://localhost:5000/confirm-reg/${token}`,
+        token: token
+    }
 }
 
 exports.createTempUserDocument = (req:Request, res:Response):void => {
@@ -48,7 +58,8 @@ exports.createTempUserDocument = (req:Request, res:Response):void => {
     tempUser.roles = body.roles ? body.roles : ["DEFAULT"];
     if (body.groups) tempUser.groups.push(body.groups);
 
-    const link:string = generateConfirmationLink(body.email);
+    const confirmationPayload:GeneratedConfirmationPayload = generateConfirmationPayload(body.email);
+    tempUser.confirmation_token = confirmationPayload.token;
 
     tempUser.save(async (err:MongoError, user:User) => {
         if (err) res.status(500).json({message: "Error when saving new user! Could not save user", Error: err});
@@ -56,7 +67,7 @@ exports.createTempUserDocument = (req:Request, res:Response):void => {
         const mailReg:Dudes.MailStatus = await mailer.sendRegistrationConfirmationEmail({
             username: body.name,
             email: body.email,
-            link: link
+            link: confirmationPayload.link
         });
 
         if (!mailReg.status) res.status(500).json({message: `Unable to send confirmation email!`, details: mailReg.context});
@@ -65,6 +76,21 @@ exports.createTempUserDocument = (req:Request, res:Response):void => {
             message: "Temporary user created! Please, confirm your E-mail.",
         })
     });
+}
+
+exports.confirmUserRegistration = (req:Request, res:Response) => {
+    const token:string = req.body.token;
+
+    TempUser.findOne({confirmation_token: token}, (err:MongoError, tempDoc:any) => {
+        if (err) res.status(500).json({message: 'Unable to confirm user', details: err});
+
+        const user:any = new User();
+
+        user.name = tempDoc.name;
+        user.email = tempDoc.email;
+        user.password = tempDoc.password;
+        user._id = tempDoc._id;
+    })
 }
 
 //
